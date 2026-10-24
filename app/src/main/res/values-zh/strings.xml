@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name" translatable="false">TiktokPatchXposed 優化版</string>
+    <string name="module_description">TikTok LSPosed 模块優化版：消除上下黑邊、沉浸式全屏、透明度調節、無廣告、全畫質下載、自動滾動、隱藏元素、強調色與 AMOLED 主題、評論翻譯、區域偽裝與隱身模式。設置：TikTok → 設置與隱私。</string>
+</resources>
