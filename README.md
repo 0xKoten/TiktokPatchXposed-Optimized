@@ -1,5 +1,7 @@
 # TiktokPatchXposed 優化版 (Optimized Edition)
 
+[繁體中文](README.md) | [English](README_EN.md) | [简体中文](README_ZH-CN.md) | [日本語](README_JA.md) | [Русский](README_RU.md) | [Español](README_ES.md)
+
 > 本專案基於 [hik0w/TiktokPatchXposed](https://github.com/hik0w/TiktokPatchXposed) 開源專案進行深度優化與功能擴充。
 > 由衷感謝原作者 **hik0w** 提供的優秀模組架構與開源基礎！
 
