@@ -9,6 +9,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.ViewTreeObserver;
@@ -16,6 +17,7 @@ import android.view.Window;
 import android.view.WindowInsets;
 import android.view.WindowInsetsController;
 import android.view.WindowManager;
+import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 
 import java.lang.ref.WeakReference;
@@ -528,6 +530,13 @@ final class HomeNavigation implements Application.ActivityLifecycleCallbacks {
                         bottomTab.setBackground(null);
                         bottomTab.setBackgroundColor(Color.TRANSPARENT);
                     }
+                    // Enforce 4-tab centered layout across tab switching and layout redraws
+                    if (Prefs.on(Prefs.HIDE_PLUS_BUTTON)) {
+                        ViewGroup container = findTabsContainer(bottomTab);
+                        if (container != null) {
+                            enforceFourTabsCentered(container, alpha);
+                        }
+                    }
                 }
             }
 
@@ -639,10 +648,6 @@ final class HomeNavigation implements Application.ActivityLifecycleCallbacks {
             }
         }
 
-        /**
-         * Applies bottom bar transparency, complete hiding, or middle "+" removal
-         * with 4-tab adaptive screen width allocation.
-         */
         private void applyBottomNav(View bottomBar, boolean removeEdges, boolean hideBottom,
                                     boolean hidePlus, float alpha) {
             if (bottomBar == null) return;
@@ -681,100 +686,197 @@ final class HomeNavigation implements Application.ActivityLifecycleCallbacks {
             ViewGroup container = findTabsContainer(bottomBar);
             if (container == null) return;
 
+            // Attach layout change listener once to continuously keep 4 tabs centered
+            attachCenteringListener(container, alpha);
+
             List<View> tabs = getTabItems(container);
             if (tabs.isEmpty()) return;
 
             View plusButton = findPlusButton(tabs, container);
 
-            if (hidePlus && plusButton != null) {
-                // 1. Hide the middle "+" button
-                plusButton.setVisibility(View.GONE);
-                plusButton.setAlpha(0f);
-                plusButton.setClickable(false);
-                plusButton.setFocusable(false);
-                ViewGroup.LayoutParams plusLp = plusButton.getLayoutParams();
-                if (plusLp instanceof LinearLayout.LayoutParams) {
-                    LinearLayout.LayoutParams llp = (LinearLayout.LayoutParams) plusLp;
-                    llp.width = 0;
-                    llp.weight = 0f;
-                    plusButton.setLayoutParams(llp);
-                } else if (plusLp != null) {
-                    plusLp.width = 0;
-                    plusButton.setLayoutParams(plusLp);
-                }
-
-                // 2. Evenly distribute remaining 4 tabs across full width (25% each)
-                List<View> remainingTabs = new ArrayList<>(tabs);
-                remainingTabs.remove(plusButton);
-                int count = remainingTabs.size();
-
-                if (count > 0) {
-                    if (container instanceof LinearLayout) {
-                        for (View tab : remainingTabs) {
-                            ViewGroup.LayoutParams p = tab.getLayoutParams();
-                            if (p instanceof LinearLayout.LayoutParams) {
-                                LinearLayout.LayoutParams llp = (LinearLayout.LayoutParams) p;
-                                llp.width = 0;
-                                llp.weight = 1.0f; // Each tab gets 1.0 weight (25%)
-                                llp.leftMargin = 0;
-                                llp.rightMargin = 0;
-                                tab.setLayoutParams(llp);
-                            }
-                            tab.setVisibility(View.VISIBLE);
-                            tab.setAlpha(alpha);
-                            tab.setClickable(true);
-                            tab.setFocusable(true);
-                        }
-                    } else {
-                        int totalWidth = container.getWidth() > 0 ? container.getWidth()
-                                : container.getResources().getDisplayMetrics().widthPixels;
-                        int tabWidth = totalWidth / count;
-                        for (View tab : remainingTabs) {
-                            ViewGroup.LayoutParams p = tab.getLayoutParams();
-                            if (p != null) {
-                                p.width = tabWidth;
-                                tab.setLayoutParams(p);
-                            }
-                            tab.setVisibility(View.VISIBLE);
-                            tab.setAlpha(alpha);
-                            tab.setClickable(true);
-                            tab.setFocusable(true);
-                        }
-                    }
-                    container.requestLayout();
-                }
+            if (hidePlus) {
+                enforceFourTabsCentered(container, alpha);
             } else {
-                // Restore 5 tabs layout (each gets 20% width)
-                if (plusButton != null) {
-                    plusButton.setVisibility(View.VISIBLE);
-                    plusButton.setAlpha(alpha);
-                    plusButton.setClickable(true);
-                    plusButton.setFocusable(true);
-                }
-                if (container instanceof LinearLayout) {
-                    for (View tab : tabs) {
-                        ViewGroup.LayoutParams p = tab.getLayoutParams();
-                        if (p instanceof LinearLayout.LayoutParams) {
-                            LinearLayout.LayoutParams llp = (LinearLayout.LayoutParams) p;
-                            llp.width = 0;
-                            llp.weight = 1.0f; // Each of 5 tabs gets equal weight (20%)
-                            llp.leftMargin = 0;
-                            llp.rightMargin = 0;
-                            tab.setLayoutParams(llp);
-                        }
-                        tab.setVisibility(View.VISIBLE);
-                        tab.setAlpha(alpha);
-                        tab.setClickable(true);
-                        tab.setFocusable(true);
-                    }
-                    container.requestLayout();
-                }
+                restoreFiveTabs(container, plusButton, tabs, alpha);
             }
 
             lastNavState.hideBottom = false;
             lastNavState.hidePlus = hidePlus;
             lastNavState.alpha = alpha;
             lastNavState.removeEdges = removeEdges;
+        }
+
+        private static void attachCenteringListener(ViewGroup container, float alpha) {
+            final int TAG_KEY = 0x7f0a4f03;
+            if (container.getTag(TAG_KEY) != null) return;
+            View.OnLayoutChangeListener listener = (v, left, top, right, bottom, oldL, oldT, oldR, oldB) -> {
+                if (Prefs.on(Prefs.HIDE_PLUS_BUTTON)) {
+                    enforceFourTabsCentered((ViewGroup) v, alpha);
+                }
+            };
+            container.addOnLayoutChangeListener(listener);
+            container.setTag(TAG_KEY, listener);
+        }
+
+        private static void enforceFourTabsCentered(ViewGroup container, float alpha) {
+            if (container == null) return;
+            List<View> tabs = getTabItems(container);
+            if (tabs.isEmpty()) return;
+
+            View plusButton = findPlusButton(tabs, container);
+            if (plusButton != null) {
+                if (plusButton.getVisibility() != View.GONE) {
+                    plusButton.setVisibility(View.GONE);
+                }
+                plusButton.setAlpha(0f);
+                plusButton.setClickable(false);
+                plusButton.setFocusable(false);
+                ViewGroup.LayoutParams plusLp = plusButton.getLayoutParams();
+                if (plusLp instanceof LinearLayout.LayoutParams) {
+                    LinearLayout.LayoutParams llp = (LinearLayout.LayoutParams) plusLp;
+                    if (llp.width != 0 || llp.weight != 0f) {
+                        llp.width = 0;
+                        llp.weight = 0f;
+                        llp.leftMargin = 0;
+                        llp.rightMargin = 0;
+                        plusButton.setLayoutParams(llp);
+                    }
+                } else if (plusLp != null && plusLp.width != 0) {
+                    plusLp.width = 0;
+                    plusButton.setLayoutParams(plusLp);
+                }
+            }
+
+            List<View> remainingTabs = new ArrayList<>(tabs);
+            if (plusButton != null) {
+                remainingTabs.remove(plusButton);
+            }
+            int count = remainingTabs.size();
+            if (count == 0) return;
+
+            if (container instanceof LinearLayout) {
+                LinearLayout ll = (LinearLayout) container;
+                ll.setGravity(Gravity.CENTER_VERTICAL);
+                ll.setWeightSum(count);
+                ll.setClipChildren(false);
+                ll.setClipToPadding(false);
+
+                for (View tab : remainingTabs) {
+                    ViewGroup.LayoutParams p = tab.getLayoutParams();
+                    if (p instanceof LinearLayout.LayoutParams) {
+                        LinearLayout.LayoutParams llp = (LinearLayout.LayoutParams) p;
+                        boolean needsUpdate = llp.width != 0 || Math.abs(llp.weight - 1.0f) > 0.01f
+                                || llp.leftMargin != 0 || llp.rightMargin != 0
+                                || llp.gravity != Gravity.CENTER;
+                        if (needsUpdate) {
+                            llp.width = 0;
+                            llp.weight = 1.0f; // Each gets 1.0 weight (25%)
+                            llp.gravity = Gravity.CENTER;
+                            llp.leftMargin = 0;
+                            llp.rightMargin = 0;
+                            tab.setLayoutParams(llp);
+                        }
+                    }
+                    if (tab.getVisibility() != View.VISIBLE) {
+                        tab.setVisibility(View.VISIBLE);
+                    }
+                    if (Math.abs(tab.getAlpha() - alpha) > 0.02f) {
+                        tab.setAlpha(alpha);
+                    }
+                    tab.setClickable(true);
+                    tab.setFocusable(true);
+                    centerInnerTabViews(tab);
+                }
+            } else {
+                int totalWidth = container.getWidth() > 0 ? container.getWidth()
+                        : container.getResources().getDisplayMetrics().widthPixels;
+                int tabWidth = totalWidth / count;
+                for (int i = 0; i < count; i++) {
+                    View tab = remainingTabs.get(i);
+                    ViewGroup.LayoutParams p = tab.getLayoutParams();
+                    if (p != null && p.width != tabWidth) {
+                        p.width = tabWidth;
+                        tab.setLayoutParams(p);
+                    }
+                    if (tab.getVisibility() != View.VISIBLE) {
+                        tab.setVisibility(View.VISIBLE);
+                    }
+                    if (Math.abs(tab.getAlpha() - alpha) > 0.02f) {
+                        tab.setAlpha(alpha);
+                    }
+                    tab.setClickable(true);
+                    tab.setFocusable(true);
+                    centerInnerTabViews(tab);
+                }
+            }
+            container.requestLayout();
+        }
+
+        private static void restoreFiveTabs(ViewGroup container, View plusButton, List<View> tabs, float alpha) {
+            if (plusButton != null) {
+                plusButton.setVisibility(View.VISIBLE);
+                plusButton.setAlpha(alpha);
+                plusButton.setClickable(true);
+                plusButton.setFocusable(true);
+                ViewGroup.LayoutParams plusLp = plusButton.getLayoutParams();
+                if (plusLp instanceof LinearLayout.LayoutParams) {
+                    LinearLayout.LayoutParams llp = (LinearLayout.LayoutParams) plusLp;
+                    llp.width = 0;
+                    llp.weight = 1.0f;
+                    llp.leftMargin = 0;
+                    llp.rightMargin = 0;
+                    plusButton.setLayoutParams(llp);
+                } else if (plusLp != null) {
+                    plusLp.width = ViewGroup.LayoutParams.WRAP_CONTENT;
+                    plusButton.setLayoutParams(plusLp);
+                }
+            }
+            if (container instanceof LinearLayout) {
+                LinearLayout ll = (LinearLayout) container;
+                ll.setWeightSum(5.0f);
+                for (View tab : tabs) {
+                    ViewGroup.LayoutParams p = tab.getLayoutParams();
+                    if (p instanceof LinearLayout.LayoutParams) {
+                        LinearLayout.LayoutParams llp = (LinearLayout.LayoutParams) p;
+                        llp.width = 0;
+                        llp.weight = 1.0f;
+                        llp.leftMargin = 0;
+                        llp.rightMargin = 0;
+                        tab.setLayoutParams(llp);
+                    }
+                    tab.setVisibility(View.VISIBLE);
+                    tab.setAlpha(alpha);
+                    tab.setClickable(true);
+                    tab.setFocusable(true);
+                }
+            }
+            container.requestLayout();
+        }
+
+        private static void centerInnerTabViews(View tab) {
+            if (!(tab instanceof ViewGroup)) return;
+            ViewGroup vg = (ViewGroup) tab;
+            if (vg instanceof LinearLayout) {
+                ((LinearLayout) vg).setGravity(Gravity.CENTER);
+            }
+            for (int i = 0; i < vg.getChildCount(); i++) {
+                View child = vg.getChildAt(i);
+                if (child == null) continue;
+                ViewGroup.LayoutParams cp = child.getLayoutParams();
+                if (cp instanceof FrameLayout.LayoutParams) {
+                    FrameLayout.LayoutParams flp = (FrameLayout.LayoutParams) cp;
+                    if (flp.gravity != Gravity.CENTER) {
+                        flp.gravity = Gravity.CENTER;
+                        child.setLayoutParams(flp);
+                    }
+                } else if (cp instanceof LinearLayout.LayoutParams) {
+                    LinearLayout.LayoutParams llp = (LinearLayout.LayoutParams) cp;
+                    if (llp.gravity != Gravity.CENTER_HORIZONTAL && llp.gravity != Gravity.CENTER) {
+                        llp.gravity = Gravity.CENTER_HORIZONTAL;
+                        child.setLayoutParams(llp);
+                    }
+                }
+            }
         }
 
         private static ViewGroup findTabsContainer(View bottomBar) {
@@ -821,25 +923,29 @@ final class HomeNavigation implements Application.ActivityLifecycleCallbacks {
 
         private static View findPlusButton(List<View> tabs, ViewGroup container) {
             if (tabs.isEmpty()) return null;
-            // 1. If exactly 5 tabs, the middle one (index 2) is the "+" button
-            if (tabs.size() == 5) {
-                return tabs.get(2);
-            }
-            // 2. Check by content description
+            // 1. Check by content description
             for (View tab : tabs) {
                 CharSequence desc = tab.getContentDescription();
                 if (desc != null && isPlusDescription(desc.toString())) {
                     return tab;
                 }
             }
+            // 2. If exactly 5 tabs, the middle one (index 2) is the "+" button
+            if (tabs.size() == 5) {
+                return tabs.get(2);
+            }
             // 3. Check by screen center X
             int center = container.getWidth() > 0 ? container.getWidth() / 2
                     : container.getResources().getDisplayMetrics().widthPixels / 2;
             for (View tab : tabs) {
                 int cx = tab.getLeft() + tab.getWidth() / 2;
-                if (Math.abs(cx - center) < dpToPx(tab.getContext(), 35)) {
+                if (cx > 0 && Math.abs(cx - center) < dpToPx(tab.getContext(), 35)) {
                     return tab;
                 }
+            }
+            // 4. Fallback: if container has 5 children, index 2
+            if (container != null && container.getChildCount() == 5) {
+                return container.getChildAt(2);
             }
             return null;
         }
@@ -849,8 +955,10 @@ final class HomeNavigation implements Application.ActivityLifecycleCallbacks {
             String lower = s.toLowerCase();
             return lower.contains("create") || lower.contains("publish") || lower.contains("upload")
                     || lower.contains("post") || lower.contains("record") || lower.contains("+")
+                    || lower.contains("shoot") || lower.contains("camera")
                     || lower.contains("拍攝") || lower.contains("发布") || lower.contains("發佈")
-                    || lower.contains("建立") || lower.contains("發布");
+                    || lower.contains("建立") || lower.contains("發布") || lower.contains("加號")
+                    || lower.contains("拍");
         }
 
         private void applyTopNav(View view, boolean removeEdges, boolean hideTop) {

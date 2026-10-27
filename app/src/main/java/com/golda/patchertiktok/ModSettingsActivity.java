@@ -746,6 +746,7 @@ public final class ModSettingsActivity extends Activity {
         label.setEllipsize(TextUtils.TruncateAt.END);
         tile.addView(label);
         GradientDrawable fill = rounded(palette.card, dp(18));
+        fill.setStroke(dp(1), palette.dark ? 0x1AFFFFFF : 0x0E000000);
         tile.setBackground(new RippleDrawable(ColorStateList.valueOf(palette.dark ? 0x22FFFFFF : 0x22000000), fill, null));
         tile.setContentDescription(I18n.get(title));
         float[] state = {on(keys) ? 1f : 0f};
@@ -879,8 +880,10 @@ public final class ModSettingsActivity extends Activity {
     private EditText searchBox(LinearLayout parent) {
         LinearLayout searchBox = new LinearLayout(this);
         searchBox.setGravity(Gravity.CENTER_VERTICAL);
-        searchBox.setPadding(dp(12), 0, dp(12), 0);
-        searchBox.setBackground(rounded(palette.field, dp(12)));
+        searchBox.setPadding(dp(14), 0, dp(14), 0);
+        GradientDrawable searchBg = rounded(palette.field, dp(14));
+        searchBg.setStroke(dp(1), palette.dark ? 0x1AFFFFFF : 0x0E000000);
+        searchBox.setBackground(searchBg);
         ImageView glass = new ImageView(this);
         glass.setImageDrawable(new Glyph(Glyph.Kind.SEARCH, palette.textSecondary, dp(18)));
         searchBox.addView(glass, new LinearLayout.LayoutParams(dp(18), dp(18)));
@@ -907,11 +910,19 @@ public final class ModSettingsActivity extends Activity {
      */
     private Runnable categoryRow(LinearLayout card, Category category) {
         LinearLayout row = row(card);
+        FrameLayout iconBadge = new FrameLayout(this);
+        int badgeBg = (0x24000000) | (category.color & 0x00FFFFFF);
+        GradientDrawable badgeShape = rounded(badgeBg, dp(11));
+        iconBadge.setBackground(badgeShape);
         ImageView icon = new ImageView(this);
-        icon.setImageDrawable(new Glyph(category.icon, palette.textSecondary, dp(20)));
-        LinearLayout.LayoutParams iconParams = new LinearLayout.LayoutParams(dp(20), dp(20));
+        icon.setImageDrawable(new Glyph(category.icon, category.color, dp(20)));
+        FrameLayout.LayoutParams innerParams = new FrameLayout.LayoutParams(dp(20), dp(20), Gravity.CENTER);
+        iconBadge.addView(icon, innerParams);
+
+        LinearLayout.LayoutParams iconParams = new LinearLayout.LayoutParams(dp(36), dp(36));
         iconParams.setMarginEnd(dp(14));
-        row.addView(icon, iconParams);
+        iconParams.gravity = Gravity.CENTER_VERTICAL;
+        row.addView(iconBadge, iconParams);
         LinearLayout texts = texts(row, I18n.get(category.title), null);
         texts.setContentDescription(I18n.get(category.title) + ". " + categorySummary(category));
         TextView value = null;
@@ -1843,29 +1854,45 @@ public final class ModSettingsActivity extends Activity {
         row.setBackground(null);
         row.setOrientation(LinearLayout.VERTICAL);
         row.setGravity(Gravity.START);
-        row.setPadding(dp(16), dp(10), dp(16), dp(12));
+        row.setPadding(dp(16), dp(12), dp(16), dp(14));
+
+        LinearLayout headerRow = new LinearLayout(this);
+        headerRow.setOrientation(LinearLayout.HORIZONTAL);
+        headerRow.setGravity(Gravity.CENTER_VERTICAL);
 
         TextView labelView = new TextView(this);
         labelView.setTextColor(palette.textPrimary);
-        labelView.setTextSize(15);
+        labelView.setTextSize(15.5f);
         labelView.setTypeface(Fonts.semibold(this));
+        labelView.setText(title);
+        headerRow.addView(labelView, new LinearLayout.LayoutParams(0, -2, 1));
 
         long current = Prefs.number(prefKey);
         int currentVal = current <= 0 && !Prefs.contains(prefKey) ? defaultVal : (int) Math.max(minVal, Math.min(maxVal, current));
 
-        labelView.setText(title + " (" + currentVal + "%)");
-        row.addView(labelView);
+        TextView badgeView = new TextView(this);
+        badgeView.setTextSize(13);
+        badgeView.setTypeface(Fonts.bold(this));
+        badgeView.setTextColor(palette.trackOn);
+        int badgeBg = (0x24000000) | (palette.trackOn & 0x00FFFFFF);
+        badgeView.setBackground(rounded(badgeBg, dp(8)));
+        badgeView.setPadding(dp(10), dp(3), dp(10), dp(3));
+        badgeView.setText(currentVal + "%");
+        headerRow.addView(badgeView, new LinearLayout.LayoutParams(-2, -2));
+
+        row.addView(headerRow, new LinearLayout.LayoutParams(-1, -2));
 
         android.widget.SeekBar slider = new android.widget.SeekBar(this);
         slider.setMax(maxVal - minVal);
         slider.setProgress(currentVal - minVal);
         slider.setProgressTintList(ColorStateList.valueOf(palette.trackOn));
         slider.setThumbTintList(ColorStateList.valueOf(palette.trackOn));
+        slider.setPadding(dp(10), dp(8), dp(10), dp(8));
 
         slider.setOnSeekBarChangeListener(new android.widget.SeekBar.OnSeekBarChangeListener() {
             @Override public void onProgressChanged(android.widget.SeekBar bar, int progress, boolean user) {
                 int val = progress + minVal;
-                labelView.setText(title + " (" + val + "%)");
+                badgeView.setText(val + "%");
             }
             @Override public void onStartTrackingTouch(android.widget.SeekBar bar) { }
             @Override public void onStopTrackingTouch(android.widget.SeekBar bar) {
@@ -1874,16 +1901,16 @@ public final class ModSettingsActivity extends Activity {
         });
 
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, -2);
-        params.topMargin = dp(6);
+        params.topMargin = dp(8);
         row.addView(slider, params);
 
         if (desc != null && !desc.isEmpty()) {
             TextView descView = new TextView(this);
             descView.setTextColor(palette.textSecondary);
-            descView.setTextSize(12);
+            descView.setTextSize(12.5f);
             descView.setText(desc);
             LinearLayout.LayoutParams descParams = new LinearLayout.LayoutParams(-1, -2);
-            descParams.topMargin = dp(2);
+            descParams.topMargin = dp(3);
             row.addView(descView, descParams);
         }
     }
@@ -2559,12 +2586,14 @@ public final class ModSettingsActivity extends Activity {
     private LinearLayout card(LinearLayout parent) {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
-        card.setBackground(rounded(palette.card, dp(16)));
+        GradientDrawable cardBg = rounded(palette.card, dp(18));
+        cardBg.setStroke(dp(1), palette.dark ? 0x1AFFFFFF : 0x0E000000);
+        card.setBackground(cardBg);
         card.setClipToOutline(true);
         GradientDrawable line = new GradientDrawable();
         line.setColor(palette.hairline);
         line.setSize(0, Math.max(1, dp(0.5f)));
-        card.setDividerDrawable(new android.graphics.drawable.InsetDrawable(line, dp(18), 0, 0, 0));
+        card.setDividerDrawable(new android.graphics.drawable.InsetDrawable(line, dp(58), 0, 0, 0));
         card.setShowDividers(LinearLayout.SHOW_DIVIDER_MIDDLE);
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, -2);
         params.setMargins(dp(16), 0, dp(16), 0);
@@ -2801,8 +2830,8 @@ public final class ModSettingsActivity extends Activity {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setMinimumHeight(dp(54));
-        row.setPadding(dp(18), dp(11), dp(16), dp(11));
+        row.setMinimumHeight(dp(56));
+        row.setPadding(dp(16), dp(12), dp(16), dp(12));
         row.setClipToPadding(false);
         // The card clips the press wash to its rounded corners.
         row.setBackground(new RippleDrawable(ColorStateList.valueOf(palette.pressed), null,
@@ -3051,10 +3080,10 @@ public final class ModSettingsActivity extends Activity {
         void section(String title) {
             TextView header = new TextView(ModSettingsActivity.this);
             header.setText(title);
-            header.setTextColor(palette.textTertiary);
-            header.setTextSize(12.5f);
-            header.setTypeface(Fonts.regular(ModSettingsActivity.this));
-            header.setPadding(dp(34), dp(24), dp(34), dp(8));
+            header.setTextColor(palette.textSecondary);
+            header.setTextSize(13f);
+            header.setTypeface(Fonts.semibold(ModSettingsActivity.this));
+            header.setPadding(dp(26), dp(20), dp(26), dp(8));
             if (Build.VERSION.SDK_INT >= 28) header.setAccessibilityHeading(true);
             content.addView(header);
         }
@@ -3065,9 +3094,9 @@ public final class ModSettingsActivity extends Activity {
             TextView footer = new TextView(ModSettingsActivity.this);
             footer.setText(text);
             footer.setTextColor(palette.textTertiary);
-            footer.setTextSize(13);
+            footer.setTextSize(12.5f);
             footer.setTypeface(Fonts.regular(ModSettingsActivity.this));
-            footer.setPadding(dp(24), dp(8), dp(24), 0);
+            footer.setPadding(dp(26), dp(8), dp(26), dp(4));
             content.addView(footer);
         }
     }
