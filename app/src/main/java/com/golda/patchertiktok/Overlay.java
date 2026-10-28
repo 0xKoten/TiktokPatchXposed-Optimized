@@ -4,11 +4,13 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
 import android.view.View;
+import android.view.ViewTreeObserver;
 
 import java.lang.ref.WeakReference;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 /**
@@ -41,8 +43,8 @@ final class Overlay {
             {FEED + "assem.tikbot.TakoAssemRoof", "tako"},
     };
     /** Views of those components, by switch; hidden ones are also in {@link #OURS}. */
-    private static final java.util.Map<View, String> PARTS = new java.util.WeakHashMap<>();
-    private static final java.util.Map<View, Boolean> OURS = new java.util.WeakHashMap<>();
+    private static final java.util.Map<View, String> PARTS = Collections.synchronizedMap(new java.util.WeakHashMap<>());
+    private static final java.util.Map<View, Boolean> OURS = Collections.synchronizedMap(new java.util.WeakHashMap<>());
     /** False when TikTok renamed the components: parts are then found by where they sit. */
     private static boolean components;
     private static final String REQUESTED = "com.golda.patchertiktok.alpha";
@@ -85,22 +87,28 @@ final class Overlay {
         try {
             Hooks.findAndHook(View.class, "setVisibility", int.class, new Hooks.Hook() {
                 @Override protected void before(Hooks.Call param) {
-                    View v = (View) param.thisObject;
-                    String kind = PARTS.get(v);
-                    if (kind == null) kind = HIDDEN.get(v);
-                    if (kind != null && partWanted(kind)) {
-                        param.args[0] = "tako".equals(kind) ? View.GONE : View.INVISIBLE;
-                    }
+                    try {
+                        View v = (View) param.thisObject;
+                        if (v == null) return;
+                        String kind = PARTS.get(v);
+                        if (kind == null) kind = HIDDEN.get(v);
+                        if (kind != null && partWanted(kind)) {
+                            param.args[0] = "tako".equals(kind) ? View.GONE : View.INVISIBLE;
+                        }
+                    } catch (Throwable ignored) { }
                 }
             });
             Hooks.findAndHook(View.class, "setAlpha", float.class, new Hooks.Hook() {
                 @Override protected void before(Hooks.Call param) {
-                    View v = (View) param.thisObject;
-                    String kind = PARTS.get(v);
-                    if (kind == null) kind = HIDDEN.get(v);
-                    if (kind != null && partWanted(kind)) {
-                        param.args[0] = 0f;
-                    }
+                    try {
+                        View v = (View) param.thisObject;
+                        if (v == null) return;
+                        String kind = PARTS.get(v);
+                        if (kind == null) kind = HIDDEN.get(v);
+                        if (kind != null && partWanted(kind)) {
+                            param.args[0] = 0f;
+                        }
+                    } catch (Throwable ignored) { }
                 }
             });
         } catch (Throwable t) {
@@ -109,28 +117,81 @@ final class Overlay {
         for (Constructor<?> constructor : layer.getDeclaredConstructors()) {
             Hooks.hook(constructor, new Hooks.Hook() {
                 @Override protected void after(Hooks.Call param) {
-                    View view = (View) param.thisObject;
-                    synchronized (LAYERS) {
-                        LAYERS.removeIf(ref -> ref.get() == null);
-                        LAYERS.add(new WeakReference<>(view));
-                    }
-                    view.post(() -> apply(view));
-                    view.getViewTreeObserver().addOnGlobalLayoutListener(() -> hideParts(view));
-                    view.getViewTreeObserver().addOnPreDrawListener(() -> {
-                        float expected = factor();
-                        if (view.getVisibility() == View.VISIBLE && Math.abs(view.getAlpha() - expected) > 0.02f) {
-                            view.animate().cancel();
-                            view.setAlpha(expected);
+                    try {
+                        View view = (View) param.thisObject;
+                        if (view == null) return;
+                        synchronized (LAYERS) {
+                            LAYERS.removeIf(ref -> ref.get() == null);
+                            LAYERS.add(new WeakReference<>(view));
                         }
-                        for (View part : new java.util.ArrayList<>(PARTS.keySet())) {
-                            if (part != null) enforce(part);
+                        view.post(() -> apply(view));
+
+                        // Trigger position-based hide on layout change only (not every frame)
+                        view.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> {
+                            try {
+                                hideParts(v);
+                            } catch (Throwable ignored) { }
+                        });
+
+                        // Managed OnPreDrawListener that cleans up on detach
+                        ViewTreeObserver.OnPreDrawListener preDrawListener = new ViewTreeObserver.OnPreDrawListener() {
+                            @Override public boolean onPreDraw() {
+                                try {
+                                    if (!view.isAttachedToWindow() || view.getVisibility() != View.VISIBLE) {
+                                        return true;
+                                    }
+                                    float expected = factor();
+                                    if (Math.abs(view.getAlpha() - expected) > 0.02f) {
+                                        view.animate().cancel();
+                                        view.setAlpha(expected);
+                                    }
+                                    if (Prefs.on(Prefs.HIDE_BUTTONS) || Prefs.on(Prefs.HIDE_CAPTION)
+                                            || Prefs.on(Prefs.HIDE_MUSIC) || Prefs.on(Prefs.HIDE_TAKO)) {
+                                        synchronized (PARTS) {
+                                            for (View part : PARTS.keySet()) {
+                                                if (part != null && part.isAttachedToWindow()) enforce(part);
+                                            }
+                                        }
+                                        synchronized (HIDDEN) {
+                                            for (View part : HIDDEN.keySet()) {
+                                                if (part != null && part.isAttachedToWindow()) enforce(part);
+                                            }
+                                        }
+                                    }
+                                } catch (Throwable ignored) { }
+                                return true;
+                            }
+                        };
+
+                        view.addOnAttachStateChangeListener(new View.OnAttachStateChangeListener() {
+                            @Override public void onViewAttachedToWindow(View v) {
+                                try {
+                                    ViewTreeObserver vto = v.getViewTreeObserver();
+                                    if (vto != null && vto.isAlive()) {
+                                        vto.removeOnPreDrawListener(preDrawListener);
+                                        vto.addOnPreDrawListener(preDrawListener);
+                                    }
+                                    hideParts(v);
+                                } catch (Throwable ignored) { }
+                            }
+
+                            @Override public void onViewDetachedFromWindow(View v) {
+                                try {
+                                    ViewTreeObserver vto = v.getViewTreeObserver();
+                                    if (vto != null && vto.isAlive()) {
+                                        vto.removeOnPreDrawListener(preDrawListener);
+                                    }
+                                } catch (Throwable ignored) { }
+                            }
+                        });
+
+                        if (view.isAttachedToWindow()) {
+                            ViewTreeObserver vto = view.getViewTreeObserver();
+                            if (vto != null && vto.isAlive()) {
+                                vto.addOnPreDrawListener(preDrawListener);
+                            }
                         }
-                        for (View part : new java.util.ArrayList<>(HIDDEN.keySet())) {
-                            if (part != null) enforce(part);
-                        }
-                        hideParts(view);
-                        return true;
-                    });
+                    } catch (Throwable ignored) { }
                 }
             });
         }
@@ -169,18 +230,28 @@ final class Overlay {
         if (methods.isEmpty()) return;
         Hooks.Hook hook = new Hooks.Hook() {
             @Override protected void after(Hooks.Call param) {
-                if (!(param.args[0] instanceof View)) return;
-                String kind = null;
-                for (java.util.Map.Entry<Class<?>, String> entry : kinds.entrySet()) {
-                    if (entry.getKey().isInstance(param.thisObject)) {
-                        kind = entry.getValue();
-                        break;
+                try {
+                    if (!(param.args[0] instanceof View)) return;
+                    String kind = null;
+                    for (java.util.Map.Entry<Class<?>, String> entry : kinds.entrySet()) {
+                        if (entry.getKey().isInstance(param.thisObject)) {
+                            kind = entry.getValue();
+                            break;
+                        }
                     }
-                }
-                if (kind == null) return;
-                View view = (View) param.args[0];
-                if (PARTS.put(view, kind) == null) view.getViewTreeObserver().addOnPreDrawListener(() -> !enforce(view));
-                enforce(view);
+                    if (kind == null) return;
+                    View view = (View) param.args[0];
+                    if (PARTS.put(view, kind) == null) {
+                        view.getViewTreeObserver().addOnPreDrawListener(() -> {
+                            try {
+                                return !enforce(view);
+                            } catch (Throwable t) {
+                                return true;
+                            }
+                        });
+                    }
+                    enforce(view);
+                } catch (Throwable ignored) { }
             }
         };
         for (Method method : methods) Hooks.hook(method, hook);
@@ -197,28 +268,31 @@ final class Overlay {
 
     /** Applies the switch to one part; true when it was just hidden, so that frame is skipped. */
     private static boolean enforce(View view) {
-        String kind = PARTS.get(view);
-        if (kind == null) kind = HIDDEN.get(view);
-        if (kind == null) return false;
-        boolean ours = OURS.containsKey(view);
-        if (partWanted(kind)) {
-            int hidden = "tako".equals(kind) ? View.GONE : View.INVISIBLE;
-            if (view.getVisibility() != hidden || view.getAlpha() > 0.01f) {
-                OURS.put(view, Boolean.TRUE);
-                view.setVisibility(hidden);
-                view.setAlpha(0f);
-                return true;
+        if (view == null) return false;
+        try {
+            String kind = PARTS.get(view);
+            if (kind == null) kind = HIDDEN.get(view);
+            if (kind == null) return false;
+            boolean ours = OURS.containsKey(view);
+            if (partWanted(kind)) {
+                int hidden = "tako".equals(kind) ? View.GONE : View.INVISIBLE;
+                if (view.getVisibility() != hidden || view.getAlpha() > 0.01f) {
+                    OURS.put(view, Boolean.TRUE);
+                    view.setVisibility(hidden);
+                    view.setAlpha(0f);
+                    return true;
+                }
+                return false;
             }
-            return false;
-        }
-        if (ours) {
-            OURS.remove(view);
-            int hidden = "tako".equals(kind) ? View.GONE : View.INVISIBLE;
-            if (view.getVisibility() == hidden) {
-                view.setVisibility(View.VISIBLE);
-                view.setAlpha(1f);
+            if (ours) {
+                OURS.remove(view);
+                int hidden = "tako".equals(kind) ? View.GONE : View.INVISIBLE;
+                if (view.getVisibility() == hidden) {
+                    view.setVisibility(View.VISIBLE);
+                    view.setAlpha(1f);
+                }
             }
-        }
+        } catch (Throwable ignored) { }
         return false;
     }
 
@@ -260,7 +334,7 @@ final class Overlay {
      * not by walking the layer again: the part may sit in a video that is off screen, inside a
      * container TikTok has hidden for a moment, or somewhere else after TikTok moved it.
      */
-    private static final java.util.Map<View, String> HIDDEN = new java.util.WeakHashMap<>();
+    private static final java.util.Map<View, String> HIDDEN = Collections.synchronizedMap(new java.util.WeakHashMap<>());
 
     /**
      * Hides parts of the layer by where they sit, as TikTok's view ids are obfuscated: the narrow
@@ -268,64 +342,77 @@ final class Overlay {
      * the square music disc in the bottom right corner. Only views hidden here are shown again.
      */
     static void hideParts(View layer) {
-        boolean buttons = Prefs.on(Prefs.HIDE_BUTTONS);
-        boolean caption = Prefs.on(Prefs.HIDE_CAPTION);
-        boolean music = Prefs.on(Prefs.HIDE_MUSIC);
-        restore(buttons, caption, music);
-        if (!buttons && !caption && !music) return;
-        int width = layer.getWidth();
-        int height = layer.getHeight();
-        if (width <= 0 || height <= 0 || !(layer instanceof android.view.ViewGroup)) return;
-        int[] origin = new int[2];
-        layer.getLocationInWindow(origin);
-        walk((android.view.ViewGroup) layer, origin, width, height, buttons, caption, music);
+        try {
+            boolean buttons = Prefs.on(Prefs.HIDE_BUTTONS);
+            boolean caption = Prefs.on(Prefs.HIDE_CAPTION);
+            boolean music = Prefs.on(Prefs.HIDE_MUSIC);
+            restore(buttons, caption, music);
+            if (!buttons && !caption && !music) return;
+            int width = layer.getWidth();
+            int height = layer.getHeight();
+            if (width <= 0 || height <= 0 || !(layer instanceof android.view.ViewGroup)) return;
+            int[] origin = new int[2];
+            layer.getLocationInWindow(origin);
+            walk((android.view.ViewGroup) layer, origin, width, height, buttons, caption, music);
+        } catch (Throwable ignored) { }
     }
 
     /** Shows again every part whose switch is now off. */
     private static void restore(boolean buttons, boolean caption, boolean music) {
-        if (HIDDEN.isEmpty()) return;
-        java.util.Iterator<java.util.Map.Entry<View, String>> entries = HIDDEN.entrySet().iterator();
-        while (entries.hasNext()) {
-            java.util.Map.Entry<View, String> entry = entries.next();
-            if (wanted(entry.getValue(), buttons, caption, music)) continue;
-            View view = entry.getKey();
-            entries.remove();
-            // Only our own INVISIBLE is undone; TikTok may have hidden it since for its own reasons.
-            if (view != null && view.getVisibility() == View.INVISIBLE) view.setVisibility(View.VISIBLE);
+        synchronized (HIDDEN) {
+            if (HIDDEN.isEmpty()) return;
+            java.util.Iterator<java.util.Map.Entry<View, String>> entries = HIDDEN.entrySet().iterator();
+            while (entries.hasNext()) {
+                java.util.Map.Entry<View, String> entry = entries.next();
+                if (wanted(entry.getValue(), buttons, caption, music)) continue;
+                View view = entry.getKey();
+                entries.remove();
+                // Only our own INVISIBLE is undone; TikTok may have hidden it since for its own reasons.
+                if (view != null && view.getVisibility() == View.INVISIBLE) view.setVisibility(View.VISIBLE);
+            }
         }
     }
 
     private static void walk(android.view.ViewGroup group, int[] origin, int width, int height,
                              boolean buttons, boolean caption, boolean music) {
-        int[] at = new int[2];
-        for (int index = 0; index < group.getChildCount(); index++) {
-            View child = group.getChildAt(index);
-            String mark = HIDDEN.get(child);
-            if (mark != null) {
-                // Still wanted hidden (restore ran first); TikTok may have shown it again.
-                if (child.getVisibility() == View.VISIBLE) child.setVisibility(View.INVISIBLE);
-                continue;
-            }
-            if (child.getVisibility() != View.VISIBLE) continue;
-            child.getLocationInWindow(at);
-            float left = (at[0] - origin[0]) / (float) width;
-            float top = (at[1] - origin[1]) / (float) height;
-            float right = left + child.getWidth() / (float) width;
-            float w = right - left;
-            String kind = null;
-            if (left >= 0.78f && right >= 0.95f && w <= 0.25f) kind = BUTTONS;
-            else if (left >= 0.6f && right >= 0.95f && top >= 0.75f && w <= 0.32f
-                    && Math.abs(child.getWidth() - child.getHeight()) < child.getWidth() / 4) kind = MUSIC;
-            else if (left <= 0.1f && right <= 0.85f && w >= 0.4f && top >= 0.6f) kind = CAPTION;
-            if (kind != null) {
-                if (wanted(kind, buttons, caption, music)) {
-                    HIDDEN.put(child, kind);
-                    child.setVisibility(View.INVISIBLE);
+        walkInternal(group, origin, width, height, buttons, caption, music, 0);
+    }
+
+    private static void walkInternal(android.view.ViewGroup group, int[] origin, int width, int height,
+                                    boolean buttons, boolean caption, boolean music, int depth) {
+        if (group == null || depth > 15) return;
+        try {
+            int[] at = new int[2];
+            for (int index = 0; index < group.getChildCount(); index++) {
+                View child = group.getChildAt(index);
+                if (child == null) continue;
+                String mark = HIDDEN.get(child);
+                if (mark != null) {
+                    // Still wanted hidden (restore ran first); TikTok may have shown it again.
+                    if (child.getVisibility() == View.VISIBLE) child.setVisibility(View.INVISIBLE);
+                    continue;
                 }
-            } else if (child instanceof android.view.ViewGroup) {
-                walk((android.view.ViewGroup) child, origin, width, height, buttons, caption, music);
+                if (child.getVisibility() != View.VISIBLE) continue;
+                child.getLocationInWindow(at);
+                float left = (at[0] - origin[0]) / (float) width;
+                float top = (at[1] - origin[1]) / (float) height;
+                float right = left + child.getWidth() / (float) width;
+                float w = right - left;
+                String kind = null;
+                if (left >= 0.78f && right >= 0.95f && w <= 0.25f) kind = BUTTONS;
+                else if (left >= 0.6f && right >= 0.95f && top >= 0.75f && w <= 0.32f
+                        && Math.abs(child.getWidth() - child.getHeight()) < child.getWidth() / 4) kind = MUSIC;
+                else if (left <= 0.1f && right <= 0.85f && w >= 0.4f && top >= 0.6f) kind = CAPTION;
+                if (kind != null) {
+                    if (wanted(kind, buttons, caption, music)) {
+                        HIDDEN.put(child, kind);
+                        child.setVisibility(View.INVISIBLE);
+                    }
+                } else if (child instanceof android.view.ViewGroup) {
+                    walkInternal((android.view.ViewGroup) child, origin, width, height, buttons, caption, music, depth + 1);
+                }
             }
-        }
+        } catch (Throwable ignored) { }
     }
 
     private static boolean wanted(String kind, boolean buttons, boolean caption, boolean music) {
@@ -334,25 +421,31 @@ final class Overlay {
 
     /** Re-applies TikTok's own requested alpha through the scaled setter. */
     private static void apply(View view) {
-        Object requested = Hooks.getExtra(view, REQUESTED);
-        float alpha = requested instanceof Float ? (Float) requested : 1f;
-        view.animate().cancel();
-        view.setAlpha(alpha);
-        if (!Prefs.on(Prefs.BURN_IN)) {
-            view.setTranslationX(0);
-            view.setTranslationY(0);
-        }
+        try {
+            Object requested = Hooks.getExtra(view, REQUESTED);
+            float alpha = requested instanceof Float ? (Float) requested : 1f;
+            view.animate().cancel();
+            view.setAlpha(alpha);
+            if (!Prefs.on(Prefs.BURN_IN)) {
+                view.setTranslationX(0);
+                view.setTranslationY(0);
+            }
+        } catch (Throwable ignored) { }
     }
 
     private static void refresh() {
-        restore(Prefs.on(Prefs.HIDE_BUTTONS), Prefs.on(Prefs.HIDE_CAPTION), Prefs.on(Prefs.HIDE_MUSIC));
-        for (View view : layers()) {
-            apply(view);
-            hideParts(view);
-        }
-        for (View part : new ArrayList<>(PARTS.keySet())) {
-            if (part != null) enforce(part);
-        }
+        try {
+            restore(Prefs.on(Prefs.HIDE_BUTTONS), Prefs.on(Prefs.HIDE_CAPTION), Prefs.on(Prefs.HIDE_MUSIC));
+            for (View view : layers()) {
+                apply(view);
+                hideParts(view);
+            }
+            synchronized (PARTS) {
+                for (View part : new ArrayList<>(PARTS.keySet())) {
+                    if (part != null) enforce(part);
+                }
+            }
+        } catch (Throwable ignored) { }
     }
 
     private static List<View> layers() {
@@ -371,26 +464,28 @@ final class Overlay {
         private long shifted = SystemClock.uptimeMillis();
 
         @Override public void run() {
-            if (!Prefs.on(Prefs.BURN_IN)) return;
-            long now = SystemClock.uptimeMillis();
-            if (!dimmed && dims() && now - lastTouch > IDLE_MS) {
-                dimmed = true;
-                for (View view : layers()) {
-                    Object requested = Hooks.getExtra(view, REQUESTED);
-                    float alpha = requested instanceof Float ? (Float) requested : 1f;
-                    // The animator bypasses setAlpha, so the target is scaled here.
-                    view.animate().alpha(alpha * factor()).setDuration(600).start();
+            try {
+                if (!Prefs.on(Prefs.BURN_IN)) return;
+                long now = SystemClock.uptimeMillis();
+                if (!dimmed && dims() && now - lastTouch > IDLE_MS) {
+                    dimmed = true;
+                    for (View view : layers()) {
+                        Object requested = Hooks.getExtra(view, REQUESTED);
+                        float alpha = requested instanceof Float ? (Float) requested : 1f;
+                        // The animator bypasses setAlpha, so the target is scaled here.
+                        view.animate().alpha(alpha * factor()).setDuration(600).start();
+                    }
                 }
-            }
-            if (now - shifted > SHIFT_MS) {
-                shifted = now;
-                shift = (shift + 1) % 4;
-                float density = android.content.res.Resources.getSystem().getDisplayMetrics().density;
-                float dx = (shift == 1 ? 2 : shift == 3 ? -2 : 0) * density;
-                float dy = (shift == 0 ? 2 : shift == 2 ? -2 : 0) * density;
-                for (View view : layers()) view.animate().translationX(dx).translationY(dy).setDuration(1_500).start();
-            }
-            MAIN.postDelayed(this, 1_000L);
+                if (now - shifted > SHIFT_MS) {
+                    shifted = now;
+                    shift = (shift + 1) % 4;
+                    float density = android.content.res.Resources.getSystem().getDisplayMetrics().density;
+                    float dx = (shift == 1 ? 2 : shift == 3 ? -2 : 0) * density;
+                    float dy = (shift == 0 ? 2 : shift == 2 ? -2 : 0) * density;
+                    for (View view : layers()) view.animate().translationX(dx).translationY(dy).setDuration(1_500).start();
+                }
+                MAIN.postDelayed(this, 1_000L);
+            } catch (Throwable ignored) { }
         }
     };
 }

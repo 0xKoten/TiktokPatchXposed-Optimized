@@ -111,19 +111,22 @@ final class HomeNavigation implements Application.ActivityLifecycleCallbacks {
         try {
             Hooks.findAndHook(View.class, "onAttachedToWindow", new Hooks.Hook() {
                 @Override protected void after(Hooks.Call param) {
-                    View view = (View) param.thisObject;
-                    int id = view.getId();
-                    if (id == BOTTOM_SPACE_ID || id == TOP_SPACE_ID || id == BOTTOM_DIVIDER_ID || id == MASK_VIEW_ID) {
-                        registerSpace(view);
-                        if (Prefs.on(Prefs.REMOVE_BLACK_EDGES)) {
-                            collapseSpace(view, true);
+                    try {
+                        View view = (View) param.thisObject;
+                        if (view == null) return;
+                        int id = view.getId();
+                        if (id == BOTTOM_SPACE_ID || id == TOP_SPACE_ID || id == BOTTOM_DIVIDER_ID || id == MASK_VIEW_ID) {
+                            registerSpace(view);
+                            if (Prefs.on(Prefs.REMOVE_BLACK_EDGES)) {
+                                collapseSpace(view, true);
+                            }
+                        } else if (id == VERTICAL_VIEW_PAGER_ID) {
+                            registerVvp(view);
+                            if (Prefs.on(Prefs.REMOVE_BLACK_EDGES)) {
+                                tuneVerticalViewPager(view);
+                            }
                         }
-                    } else if (id == VERTICAL_VIEW_PAGER_ID) {
-                        registerVvp(view);
-                        if (Prefs.on(Prefs.REMOVE_BLACK_EDGES)) {
-                            tuneVerticalViewPager(view);
-                        }
-                    }
+                    } catch (Throwable ignored) { }
                 }
             });
         } catch (Throwable t) {
@@ -135,13 +138,16 @@ final class HomeNavigation implements Application.ActivityLifecycleCallbacks {
         try {
             Hooks.findAndHook(View.class, "setVisibility", int.class, new Hooks.Hook() {
                 @Override protected void before(Hooks.Call param) {
-                    if (!Prefs.on(Prefs.REMOVE_BLACK_EDGES)) return;
-                    View view = (View) param.thisObject;
-                    int id = view.getId();
-                    if (id == BOTTOM_SPACE_ID || id == TOP_SPACE_ID || id == BOTTOM_DIVIDER_ID || id == MASK_VIEW_ID) {
-                        registerSpace(view);
-                        param.args[0] = View.GONE;
-                    }
+                    try {
+                        if (!Prefs.on(Prefs.REMOVE_BLACK_EDGES)) return;
+                        View view = (View) param.thisObject;
+                        if (view == null) return;
+                        int id = view.getId();
+                        if (id == BOTTOM_SPACE_ID || id == TOP_SPACE_ID || id == BOTTOM_DIVIDER_ID || id == MASK_VIEW_ID) {
+                            registerSpace(view);
+                            param.args[0] = View.GONE;
+                        }
+                    } catch (Throwable ignored) { }
                 }
             });
         } catch (Throwable t) {
@@ -153,16 +159,19 @@ final class HomeNavigation implements Application.ActivityLifecycleCallbacks {
         try {
             Hooks.findAndHook(View.class, "setLayoutParams", ViewGroup.LayoutParams.class, new Hooks.Hook() {
                 @Override protected void before(Hooks.Call param) {
-                    if (!Prefs.on(Prefs.REMOVE_BLACK_EDGES)) return;
-                    View view = (View) param.thisObject;
-                    int id = view.getId();
-                    if (id == BOTTOM_SPACE_ID || id == TOP_SPACE_ID || id == BOTTOM_DIVIDER_ID || id == MASK_VIEW_ID) {
-                        registerSpace(view);
-                        ViewGroup.LayoutParams lp = (ViewGroup.LayoutParams) param.args[0];
-                        if (lp != null) {
-                            lp.height = 0;
+                    try {
+                        if (!Prefs.on(Prefs.REMOVE_BLACK_EDGES)) return;
+                        View view = (View) param.thisObject;
+                        if (view == null) return;
+                        int id = view.getId();
+                        if (id == BOTTOM_SPACE_ID || id == TOP_SPACE_ID || id == BOTTOM_DIVIDER_ID || id == MASK_VIEW_ID) {
+                            registerSpace(view);
+                            ViewGroup.LayoutParams lp = (ViewGroup.LayoutParams) param.args[0];
+                            if (lp != null) {
+                                lp.height = 0;
+                            }
                         }
-                    }
+                    } catch (Throwable ignored) { }
                 }
             });
         } catch (Throwable t) {
@@ -344,93 +353,109 @@ final class HomeNavigation implements Application.ActivityLifecycleCallbacks {
     /** Returns true if view belongs to a comment sheet, bottom sheet, or popup dialog. */
     static boolean isCommentOrDialogView(View view) {
         if (view == null) return false;
-        View current = view;
-        while (current != null) {
-            String cls = current.getClass().getName();
-            if (cls.contains("Comment") || cls.contains("comment")
-                    || cls.contains("TuxSheet") || cls.contains("BottomSheet")
-                    || cls.contains("Sheet") || cls.contains("Dialog")) {
-                return true;
+        try {
+            View current = view;
+            int depth = 0;
+            while (current != null && depth < 20) {
+                String cls = current.getClass().getName();
+                if (cls.contains("Comment") || cls.contains("comment")
+                        || cls.contains("TuxSheet") || cls.contains("BottomSheet")
+                        || cls.contains("Sheet") || cls.contains("Dialog")) {
+                    return true;
+                }
+                if (current.getParent() instanceof View) {
+                    current = (View) current.getParent();
+                    depth++;
+                } else {
+                    break;
+                }
             }
-            if (current.getParent() instanceof View) {
-                current = (View) current.getParent();
-            } else {
-                break;
-            }
-        }
+        } catch (Throwable ignored) { }
         return false;
     }
 
     static void scanAndTuneViewTree(View root) {
-        if (root == null || isCommentOrDialogView(root)) return;
-        int id = root.getId();
-        if (id == VERTICAL_VIEW_PAGER_ID) {
-            registerVvp(root);
-            tuneVerticalViewPager(root);
-        } else if (id == TOP_SPACE_ID || id == BOTTOM_SPACE_ID || id == BOTTOM_DIVIDER_ID || id == MASK_VIEW_ID
-                || (root instanceof android.widget.Space) || root.getClass().getName().endsWith("Space")) {
-            registerSpace(root);
-            collapseSpace(root, true);
-        }
-        if (root instanceof ViewGroup) {
-            ViewGroup group = (ViewGroup) root;
-            for (int i = 0; i < group.getChildCount(); i++) {
-                scanAndTuneViewTree(group.getChildAt(i));
+        scanAndTuneViewTree(root, 0);
+    }
+
+    private static void scanAndTuneViewTree(View root, int depth) {
+        if (root == null || depth > 15 || isCommentOrDialogView(root)) return;
+        try {
+            int id = root.getId();
+            if (id == VERTICAL_VIEW_PAGER_ID) {
+                registerVvp(root);
+                tuneVerticalViewPager(root);
+            } else if (id == TOP_SPACE_ID || id == BOTTOM_SPACE_ID || id == BOTTOM_DIVIDER_ID || id == MASK_VIEW_ID
+                    || (root instanceof android.widget.Space) || root.getClass().getName().endsWith("Space")) {
+                registerSpace(root);
+                collapseSpace(root, true);
             }
-        }
+            if (root instanceof ViewGroup) {
+                ViewGroup group = (ViewGroup) root;
+                for (int i = 0; i < group.getChildCount(); i++) {
+                    scanAndTuneViewTree(group.getChildAt(i), depth + 1);
+                }
+            }
+        } catch (Throwable ignored) { }
     }
 
     static void tuneVerticalViewPager(View v) {
         if (v == null || isCommentOrDialogView(v)) return;
-        v.setPadding(0, 0, 0, 0);
-        if (v instanceof ViewGroup) {
-            ViewGroup vg = (ViewGroup) v;
-            vg.setClipToPadding(true);
-            vg.setClipChildren(true);
-        }
-        android.view.ViewParent parent = v.getParent();
-        while (parent instanceof ViewGroup) {
-            ViewGroup pGroup = (ViewGroup) parent;
-            if (pGroup.getId() == android.R.id.content) break;
-            pGroup.setPadding(0, 0, 0, 0);
-            pGroup.setClipToPadding(true);
-            pGroup.setClipChildren(true);
+        try {
+            v.setPadding(0, 0, 0, 0);
+            if (v instanceof ViewGroup) {
+                ViewGroup vg = (ViewGroup) v;
+                vg.setClipToPadding(true);
+                vg.setClipChildren(true);
+            }
+            android.view.ViewParent parent = v.getParent();
+            int depth = 0;
+            while (parent instanceof ViewGroup && depth < 10) {
+                depth++;
+                ViewGroup pGroup = (ViewGroup) parent;
+                if (pGroup.getId() == android.R.id.content) break;
+                pGroup.setPadding(0, 0, 0, 0);
+                pGroup.setClipToPadding(true);
+                pGroup.setClipChildren(true);
 
-            for (int i = 0; i < pGroup.getChildCount(); i++) {
-                View child = pGroup.getChildAt(i);
-                if (child != null && child != v) {
-                    int cid = child.getId();
-                    if (cid == TOP_SPACE_ID || cid == BOTTOM_SPACE_ID || cid == BOTTOM_DIVIDER_ID || cid == MASK_VIEW_ID
-                            || (child instanceof android.widget.Space) || child.getClass().getName().endsWith("Space")) {
-                        registerSpace(child);
-                        collapseSpace(child, true);
+                for (int i = 0; i < pGroup.getChildCount(); i++) {
+                    View child = pGroup.getChildAt(i);
+                    if (child != null && child != v) {
+                        int cid = child.getId();
+                        if (cid == TOP_SPACE_ID || cid == BOTTOM_SPACE_ID || cid == BOTTOM_DIVIDER_ID || cid == MASK_VIEW_ID
+                                || (child instanceof android.widget.Space) || child.getClass().getName().endsWith("Space")) {
+                            registerSpace(child);
+                            collapseSpace(child, true);
+                        }
                     }
                 }
+                parent = pGroup.getParent();
             }
-            parent = pGroup.getParent();
-        }
+        } catch (Throwable ignored) { }
     }
 
     static void collapseSpace(View view, boolean collapse) {
         if (view == null || isCommentOrDialogView(view)) return;
-        ViewGroup.LayoutParams lp = view.getLayoutParams();
-        if (collapse) {
-            if (lp != null && lp.height != 0) {
-                lp.height = 0;
-                view.setLayoutParams(lp);
+        try {
+            ViewGroup.LayoutParams lp = view.getLayoutParams();
+            if (collapse) {
+                if (lp != null && lp.height != 0) {
+                    lp.height = 0;
+                    view.setLayoutParams(lp);
+                }
+                if (view.getVisibility() != View.GONE) {
+                    view.setVisibility(View.GONE);
+                }
+                view.setBackground(null);
+                view.setBackgroundColor(Color.TRANSPARENT);
+            } else {
+                if (lp != null && lp.height == 0) {
+                    lp.height = dpToPx(view.getContext(), 54);
+                    view.setLayoutParams(lp);
+                }
+                view.setVisibility(View.VISIBLE);
             }
-            if (view.getVisibility() != View.GONE) {
-                view.setVisibility(View.GONE);
-            }
-            view.setBackground(null);
-            view.setBackgroundColor(Color.TRANSPARENT);
-        } else {
-            if (lp != null && lp.height == 0) {
-                lp.height = dpToPx(view.getContext(), 54);
-                view.setLayoutParams(lp);
-            }
-            view.setVisibility(View.VISIBLE);
-        }
+        } catch (Throwable ignored) { }
     }
 
     /** Holds state for caching applied bottom tab configuration. */
@@ -492,75 +517,63 @@ final class HomeNavigation implements Application.ActivityLifecycleCallbacks {
          */
         @Override
         public boolean onPreDraw() {
-            boolean removeEdges = Prefs.on(Prefs.REMOVE_BLACK_EDGES);
-            if (removeEdges) {
-                synchronized (KNOWN_SPACES) {
-                    for (View space : KNOWN_SPACES) {
-                        if (space != null && space.isAttachedToWindow() && space.getVisibility() != View.GONE) {
-                            collapseSpace(space, true);
+            try {
+                boolean removeEdges = Prefs.on(Prefs.REMOVE_BLACK_EDGES);
+                if (removeEdges) {
+                    synchronized (KNOWN_SPACES) {
+                        for (View space : KNOWN_SPACES) {
+                            if (space != null && space.isAttachedToWindow() && space.getVisibility() != View.GONE) {
+                                collapseSpace(space, true);
+                            }
                         }
                     }
                 }
-                synchronized (KNOWN_VVP) {
-                    for (View vvp : KNOWN_VVP) {
-                        if (vvp != null && vvp.isAttachedToWindow() && vvp.isShown()) {
-                            tuneVerticalViewPager(vvp);
-                        }
-                    }
-                }
-            }
 
-            // Enforce bottom bar and top nav transparency & transparent bg across clean mode (簡易模式) exits
-            View bottomTab = bottomTabRef.get();
-            if (bottomTab != null && bottomTab.isAttachedToWindow()) {
-                long opacityNum = Prefs.number(Prefs.BOTTOM_NAV_OPACITY);
-                int opacity = opacityNum <= 0 && !Prefs.contains(Prefs.BOTTOM_NAV_OPACITY) ? 100
-                        : (int) Math.max(0, Math.min(100, opacityNum));
-                float alpha = Math.max(0f, Math.min(1f, opacity / 100.0f));
-                if (Prefs.on(Prefs.HIDE_BOTTOM_NAV) || alpha <= 0.01f) {
-                    if (bottomTab.getVisibility() != View.GONE) {
-                        bottomTab.setVisibility(View.GONE);
-                        bottomTab.setAlpha(0f);
-                    }
-                } else if (bottomTab.getVisibility() == View.VISIBLE) {
-                    if (Math.abs(bottomTab.getAlpha() - alpha) > 0.02f) {
-                        bottomTab.setAlpha(alpha);
-                    }
-                    if (removeEdges && bottomTab.getBackground() != null) {
-                        bottomTab.setBackground(null);
-                        bottomTab.setBackgroundColor(Color.TRANSPARENT);
-                    }
-                    // Enforce 4-tab centered layout across tab switching and layout redraws
-                    if (Prefs.on(Prefs.HIDE_PLUS_BUTTON)) {
-                        ViewGroup container = findTabsContainer(bottomTab);
-                        if (container != null) {
-                            enforceFourTabsCentered(container, alpha);
+                // Enforce bottom bar and top nav transparency & transparent bg across clean mode (簡易模式) exits
+                View bottomTab = bottomTabRef.get();
+                if (bottomTab != null && bottomTab.isAttachedToWindow()) {
+                    long opacityNum = Prefs.number(Prefs.BOTTOM_NAV_OPACITY);
+                    int opacity = opacityNum <= 0 && !Prefs.contains(Prefs.BOTTOM_NAV_OPACITY) ? 100
+                            : (int) Math.max(0, Math.min(100, opacityNum));
+                    float alpha = Math.max(0f, Math.min(1f, opacity / 100.0f));
+                    if (Prefs.on(Prefs.HIDE_BOTTOM_NAV) || alpha <= 0.01f) {
+                        if (bottomTab.getVisibility() != View.GONE) {
+                            bottomTab.setVisibility(View.GONE);
+                            bottomTab.setAlpha(0f);
+                        }
+                    } else if (bottomTab.getVisibility() == View.VISIBLE) {
+                        if (Math.abs(bottomTab.getAlpha() - alpha) > 0.02f) {
+                            bottomTab.setAlpha(alpha);
+                        }
+                        if (removeEdges && bottomTab.getBackground() != null) {
+                            bottomTab.setBackground(null);
+                            bottomTab.setBackgroundColor(Color.TRANSPARENT);
                         }
                     }
                 }
-            }
 
-            View topNav = topNavRef.get();
-            if (topNav != null && topNav.isAttachedToWindow()) {
-                long topOpacity = Prefs.number(Prefs.TOP_NAV_OPACITY);
-                int opacity = topOpacity <= 0 && !Prefs.contains(Prefs.TOP_NAV_OPACITY) ? 100
-                        : (int) Math.max(0, Math.min(100, topOpacity));
-                float alpha = Math.max(0f, Math.min(1f, opacity / 100.0f));
-                if (Prefs.on(Prefs.HIDE_TOP_NAV) || alpha <= 0.01f) {
-                    if (topNav.getVisibility() != View.GONE) {
-                        topNav.setVisibility(View.GONE);
-                        topNav.setAlpha(0f);
-                    }
-                } else if (topNav.getVisibility() == View.VISIBLE) {
-                    if (Math.abs(topNav.getAlpha() - alpha) > 0.02f) {
-                        topNav.setAlpha(alpha);
-                    }
-                    if (removeEdges && topNav.getBackground() != null) {
-                        topNav.setBackground(null);
-                        topNav.setBackgroundColor(Color.TRANSPARENT);
+                View topNav = topNavRef.get();
+                if (topNav != null && topNav.isAttachedToWindow()) {
+                    long topOpacity = Prefs.number(Prefs.TOP_NAV_OPACITY);
+                    int opacity = topOpacity <= 0 && !Prefs.contains(Prefs.TOP_NAV_OPACITY) ? 100
+                            : (int) Math.max(0, Math.min(100, topOpacity));
+                    float alpha = Math.max(0f, Math.min(1f, opacity / 100.0f));
+                    if (Prefs.on(Prefs.HIDE_TOP_NAV) || alpha <= 0.01f) {
+                        if (topNav.getVisibility() != View.GONE) {
+                            topNav.setVisibility(View.GONE);
+                            topNav.setAlpha(0f);
+                        }
+                    } else if (topNav.getVisibility() == View.VISIBLE) {
+                        if (Math.abs(topNav.getAlpha() - alpha) > 0.02f) {
+                            topNav.setAlpha(alpha);
+                        }
+                        if (removeEdges && topNav.getBackground() != null) {
+                            topNav.setBackground(null);
+                            topNav.setBackgroundColor(Color.TRANSPARENT);
+                        }
                     }
                 }
-            }
+            } catch (Throwable ignored) { }
 
             return true;
         }
@@ -710,9 +723,11 @@ final class HomeNavigation implements Application.ActivityLifecycleCallbacks {
             final int TAG_KEY = 0x7f0a4f03;
             if (container.getTag(TAG_KEY) != null) return;
             View.OnLayoutChangeListener listener = (v, left, top, right, bottom, oldL, oldT, oldR, oldB) -> {
-                if (Prefs.on(Prefs.HIDE_PLUS_BUTTON)) {
-                    enforceFourTabsCentered((ViewGroup) v, alpha);
-                }
+                try {
+                    if (Prefs.on(Prefs.HIDE_PLUS_BUTTON)) {
+                        enforceFourTabsCentered((ViewGroup) v, alpha);
+                    }
+                } catch (Throwable ignored) { }
             };
             container.addOnLayoutChangeListener(listener);
             container.setTag(TAG_KEY, listener);
@@ -720,163 +735,179 @@ final class HomeNavigation implements Application.ActivityLifecycleCallbacks {
 
         private static void enforceFourTabsCentered(ViewGroup container, float alpha) {
             if (container == null) return;
-            List<View> tabs = getTabItems(container);
-            if (tabs.isEmpty()) return;
+            try {
+                List<View> tabs = getTabItems(container);
+                if (tabs.isEmpty()) return;
 
-            View plusButton = findPlusButton(tabs, container);
-            if (plusButton != null) {
-                if (plusButton.getVisibility() != View.GONE) {
-                    plusButton.setVisibility(View.GONE);
-                }
-                plusButton.setAlpha(0f);
-                plusButton.setClickable(false);
-                plusButton.setFocusable(false);
-                ViewGroup.LayoutParams plusLp = plusButton.getLayoutParams();
-                if (plusLp instanceof LinearLayout.LayoutParams) {
-                    LinearLayout.LayoutParams llp = (LinearLayout.LayoutParams) plusLp;
-                    if (llp.width != 0 || llp.weight != 0f) {
-                        llp.width = 0;
-                        llp.weight = 0f;
-                        llp.leftMargin = 0;
-                        llp.rightMargin = 0;
-                        plusButton.setLayoutParams(llp);
+                View plusButton = findPlusButton(tabs, container);
+                if (plusButton != null) {
+                    if (plusButton.getVisibility() != View.GONE) {
+                        plusButton.setVisibility(View.GONE);
                     }
-                } else if (plusLp != null && plusLp.width != 0) {
-                    plusLp.width = 0;
-                    plusButton.setLayoutParams(plusLp);
-                }
-            }
-
-            List<View> remainingTabs = new ArrayList<>(tabs);
-            if (plusButton != null) {
-                remainingTabs.remove(plusButton);
-            }
-            int count = remainingTabs.size();
-            if (count == 0) return;
-
-            if (container instanceof LinearLayout) {
-                LinearLayout ll = (LinearLayout) container;
-                ll.setGravity(Gravity.CENTER_VERTICAL);
-                ll.setWeightSum(count);
-                ll.setClipChildren(false);
-                ll.setClipToPadding(false);
-
-                for (View tab : remainingTabs) {
-                    ViewGroup.LayoutParams p = tab.getLayoutParams();
-                    if (p instanceof LinearLayout.LayoutParams) {
-                        LinearLayout.LayoutParams llp = (LinearLayout.LayoutParams) p;
-                        boolean needsUpdate = llp.width != 0 || Math.abs(llp.weight - 1.0f) > 0.01f
-                                || llp.leftMargin != 0 || llp.rightMargin != 0
-                                || llp.gravity != Gravity.CENTER;
-                        if (needsUpdate) {
+                    plusButton.setAlpha(0f);
+                    plusButton.setClickable(false);
+                    plusButton.setFocusable(false);
+                    ViewGroup.LayoutParams plusLp = plusButton.getLayoutParams();
+                    if (plusLp instanceof LinearLayout.LayoutParams) {
+                        LinearLayout.LayoutParams llp = (LinearLayout.LayoutParams) plusLp;
+                        if (llp.width != 0 || llp.weight != 0f || llp.leftMargin != 0 || llp.rightMargin != 0) {
                             llp.width = 0;
-                            llp.weight = 1.0f; // Each gets 1.0 weight (25%)
-                            llp.gravity = Gravity.CENTER;
+                            llp.weight = 0f;
                             llp.leftMargin = 0;
                             llp.rightMargin = 0;
-                            tab.setLayoutParams(llp);
+                            plusButton.setLayoutParams(llp);
                         }
+                    } else if (plusLp != null && plusLp.width != 0) {
+                        plusLp.width = 0;
+                        plusButton.setLayoutParams(plusLp);
                     }
-                    if (tab.getVisibility() != View.VISIBLE) {
-                        tab.setVisibility(View.VISIBLE);
-                    }
-                    if (Math.abs(tab.getAlpha() - alpha) > 0.02f) {
-                        tab.setAlpha(alpha);
-                    }
-                    tab.setClickable(true);
-                    tab.setFocusable(true);
-                    centerInnerTabViews(tab);
                 }
-            } else {
-                int totalWidth = container.getWidth() > 0 ? container.getWidth()
-                        : container.getResources().getDisplayMetrics().widthPixels;
-                int tabWidth = totalWidth / count;
-                for (int i = 0; i < count; i++) {
-                    View tab = remainingTabs.get(i);
-                    ViewGroup.LayoutParams p = tab.getLayoutParams();
-                    if (p != null && p.width != tabWidth) {
-                        p.width = tabWidth;
-                        tab.setLayoutParams(p);
-                    }
-                    if (tab.getVisibility() != View.VISIBLE) {
-                        tab.setVisibility(View.VISIBLE);
-                    }
-                    if (Math.abs(tab.getAlpha() - alpha) > 0.02f) {
-                        tab.setAlpha(alpha);
-                    }
-                    tab.setClickable(true);
-                    tab.setFocusable(true);
-                    centerInnerTabViews(tab);
+
+                List<View> remainingTabs = new ArrayList<>(tabs);
+                if (plusButton != null) {
+                    remainingTabs.remove(plusButton);
                 }
-            }
-            container.requestLayout();
+                int count = remainingTabs.size();
+                if (count == 0) return;
+
+                if (container instanceof LinearLayout) {
+                    LinearLayout ll = (LinearLayout) container;
+                    if (ll.getGravity() != Gravity.CENTER_VERTICAL) {
+                        ll.setGravity(Gravity.CENTER_VERTICAL);
+                    }
+                    if (Math.abs(ll.getWeightSum() - count) > 0.01f) {
+                        ll.setWeightSum(count);
+                    }
+                    ll.setClipChildren(false);
+                    ll.setClipToPadding(false);
+
+                    for (View tab : remainingTabs) {
+                        ViewGroup.LayoutParams p = tab.getLayoutParams();
+                        if (p instanceof LinearLayout.LayoutParams) {
+                            LinearLayout.LayoutParams llp = (LinearLayout.LayoutParams) p;
+                            boolean needsUpdate = llp.width != 0 || Math.abs(llp.weight - 1.0f) > 0.01f
+                                    || llp.leftMargin != 0 || llp.rightMargin != 0
+                                    || llp.gravity != Gravity.CENTER;
+                            if (needsUpdate) {
+                                llp.width = 0;
+                                llp.weight = 1.0f; // Each gets 1.0 weight (25%)
+                                llp.gravity = Gravity.CENTER;
+                                llp.leftMargin = 0;
+                                llp.rightMargin = 0;
+                                tab.setLayoutParams(llp);
+                            }
+                        }
+                        if (tab.getVisibility() != View.VISIBLE) {
+                            tab.setVisibility(View.VISIBLE);
+                        }
+                        if (Math.abs(tab.getAlpha() - alpha) > 0.02f) {
+                            tab.setAlpha(alpha);
+                        }
+                        tab.setClickable(true);
+                        tab.setFocusable(true);
+                        centerInnerTabViews(tab);
+                    }
+                } else {
+                    int totalWidth = container.getWidth() > 0 ? container.getWidth()
+                            : container.getResources().getDisplayMetrics().widthPixels;
+                    int tabWidth = totalWidth / count;
+                    for (int i = 0; i < count; i++) {
+                        View tab = remainingTabs.get(i);
+                        ViewGroup.LayoutParams p = tab.getLayoutParams();
+                        if (p != null && p.width != tabWidth) {
+                            p.width = tabWidth;
+                            tab.setLayoutParams(p);
+                        }
+                        if (tab.getVisibility() != View.VISIBLE) {
+                            tab.setVisibility(View.VISIBLE);
+                        }
+                        if (Math.abs(tab.getAlpha() - alpha) > 0.02f) {
+                            tab.setAlpha(alpha);
+                        }
+                        tab.setClickable(true);
+                        tab.setFocusable(true);
+                        centerInnerTabViews(tab);
+                    }
+                }
+            } catch (Throwable ignored) { }
         }
 
         private static void restoreFiveTabs(ViewGroup container, View plusButton, List<View> tabs, float alpha) {
-            if (plusButton != null) {
-                plusButton.setVisibility(View.VISIBLE);
-                plusButton.setAlpha(alpha);
-                plusButton.setClickable(true);
-                plusButton.setFocusable(true);
-                ViewGroup.LayoutParams plusLp = plusButton.getLayoutParams();
-                if (plusLp instanceof LinearLayout.LayoutParams) {
-                    LinearLayout.LayoutParams llp = (LinearLayout.LayoutParams) plusLp;
-                    llp.width = 0;
-                    llp.weight = 1.0f;
-                    llp.leftMargin = 0;
-                    llp.rightMargin = 0;
-                    plusButton.setLayoutParams(llp);
-                } else if (plusLp != null) {
-                    plusLp.width = ViewGroup.LayoutParams.WRAP_CONTENT;
-                    plusButton.setLayoutParams(plusLp);
-                }
-            }
-            if (container instanceof LinearLayout) {
-                LinearLayout ll = (LinearLayout) container;
-                ll.setWeightSum(5.0f);
-                for (View tab : tabs) {
-                    ViewGroup.LayoutParams p = tab.getLayoutParams();
-                    if (p instanceof LinearLayout.LayoutParams) {
-                        LinearLayout.LayoutParams llp = (LinearLayout.LayoutParams) p;
-                        llp.width = 0;
-                        llp.weight = 1.0f;
-                        llp.leftMargin = 0;
-                        llp.rightMargin = 0;
-                        tab.setLayoutParams(llp);
+            if (container == null) return;
+            try {
+                if (plusButton != null) {
+                    plusButton.setVisibility(View.VISIBLE);
+                    plusButton.setAlpha(alpha);
+                    plusButton.setClickable(true);
+                    plusButton.setFocusable(true);
+                    ViewGroup.LayoutParams plusLp = plusButton.getLayoutParams();
+                    if (plusLp instanceof LinearLayout.LayoutParams) {
+                        LinearLayout.LayoutParams llp = (LinearLayout.LayoutParams) plusLp;
+                        if (llp.width != 0 || llp.weight != 1.0f || llp.leftMargin != 0 || llp.rightMargin != 0) {
+                            llp.width = 0;
+                            llp.weight = 1.0f;
+                            llp.leftMargin = 0;
+                            llp.rightMargin = 0;
+                            plusButton.setLayoutParams(llp);
+                        }
+                    } else if (plusLp != null) {
+                        plusLp.width = ViewGroup.LayoutParams.WRAP_CONTENT;
+                        plusButton.setLayoutParams(plusLp);
                     }
-                    tab.setVisibility(View.VISIBLE);
-                    tab.setAlpha(alpha);
-                    tab.setClickable(true);
-                    tab.setFocusable(true);
                 }
-            }
-            container.requestLayout();
+                if (container instanceof LinearLayout) {
+                    LinearLayout ll = (LinearLayout) container;
+                    if (Math.abs(ll.getWeightSum() - 5.0f) > 0.01f) {
+                        ll.setWeightSum(5.0f);
+                    }
+                    for (View tab : tabs) {
+                        ViewGroup.LayoutParams p = tab.getLayoutParams();
+                        if (p instanceof LinearLayout.LayoutParams) {
+                            LinearLayout.LayoutParams llp = (LinearLayout.LayoutParams) p;
+                            if (llp.width != 0 || Math.abs(llp.weight - 1.0f) > 0.01f
+                                    || llp.leftMargin != 0 || llp.rightMargin != 0) {
+                                llp.width = 0;
+                                llp.weight = 1.0f;
+                                llp.leftMargin = 0;
+                                llp.rightMargin = 0;
+                                tab.setLayoutParams(llp);
+                            }
+                        }
+                        tab.setVisibility(View.VISIBLE);
+                        tab.setAlpha(alpha);
+                        tab.setClickable(true);
+                        tab.setFocusable(true);
+                    }
+                }
+            } catch (Throwable ignored) { }
         }
 
         private static void centerInnerTabViews(View tab) {
             if (!(tab instanceof ViewGroup)) return;
-            ViewGroup vg = (ViewGroup) tab;
-            if (vg instanceof LinearLayout) {
-                ((LinearLayout) vg).setGravity(Gravity.CENTER);
-            }
-            for (int i = 0; i < vg.getChildCount(); i++) {
-                View child = vg.getChildAt(i);
-                if (child == null) continue;
-                ViewGroup.LayoutParams cp = child.getLayoutParams();
-                if (cp instanceof FrameLayout.LayoutParams) {
-                    FrameLayout.LayoutParams flp = (FrameLayout.LayoutParams) cp;
-                    if (flp.gravity != Gravity.CENTER) {
-                        flp.gravity = Gravity.CENTER;
-                        child.setLayoutParams(flp);
-                    }
-                } else if (cp instanceof LinearLayout.LayoutParams) {
-                    LinearLayout.LayoutParams llp = (LinearLayout.LayoutParams) cp;
-                    if (llp.gravity != Gravity.CENTER_HORIZONTAL && llp.gravity != Gravity.CENTER) {
-                        llp.gravity = Gravity.CENTER_HORIZONTAL;
-                        child.setLayoutParams(llp);
+            try {
+                ViewGroup vg = (ViewGroup) tab;
+                if (vg instanceof LinearLayout) {
+                    ((LinearLayout) vg).setGravity(Gravity.CENTER);
+                }
+                for (int i = 0; i < vg.getChildCount(); i++) {
+                    View child = vg.getChildAt(i);
+                    if (child == null) continue;
+                    ViewGroup.LayoutParams cp = child.getLayoutParams();
+                    if (cp instanceof FrameLayout.LayoutParams) {
+                        FrameLayout.LayoutParams flp = (FrameLayout.LayoutParams) cp;
+                        if (flp.gravity != Gravity.CENTER) {
+                            flp.gravity = Gravity.CENTER;
+                            child.setLayoutParams(flp);
+                        }
+                    } else if (cp instanceof LinearLayout.LayoutParams) {
+                        LinearLayout.LayoutParams llp = (LinearLayout.LayoutParams) cp;
+                        if (llp.gravity != Gravity.CENTER_HORIZONTAL && llp.gravity != Gravity.CENTER) {
+                            llp.gravity = Gravity.CENTER_HORIZONTAL;
+                            child.setLayoutParams(llp);
+                        }
                     }
                 }
-            }
+            } catch (Throwable ignored) { }
         }
 
         private static ViewGroup findTabsContainer(View bottomBar) {
